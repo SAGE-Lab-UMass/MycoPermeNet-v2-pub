@@ -1,0 +1,14 @@
+sbatch
+out
+plots
+
+*/test.py
+
+*.ipynb
+
+# Ignore all .pyc files
+*.pyc
+*.json
+
+# Ignore __pycache__ directory
+*/__pycache__/
