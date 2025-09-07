@@ -60,3 +60,7 @@ Train MycoPermeNet-v2 for other [properties' prediction from MoleculeNet](script
 ```bash
 python script/moleculenet_nst.py --moldataset Lipo --GNN AttentiveFP --fusion True --NST True --NST_volume 1000
 ```
+
+## Acknowledgement
+
+*We want to thank the [original implementation of Chemprop](https://github.com/chemprop/chemprop) and the [PyG reimplementation of Chemprop](https://github.com/itakigawa/pyg_chemprop).*
