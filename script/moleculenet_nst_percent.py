@@ -1,4 +1,4 @@
-"MycoPermeNet-v2 pipeline for MoleculeNet benchmark."
+"MycoPermeNet-v2 pipeline for MoleculeNet benchmark, a percent of training samples."
 
 from data_tools.pyg_chemprop_utils import (initialize_weights, directed_mp,
                                            aggregate_at_nodes, NoamLR, get_dataset,
@@ -258,6 +258,7 @@ parser.add_argument('--NST', type=bool, default=False, help='semi-supervised noi
 parser.add_argument('--NST_volume', type=int, default=1000, help='Number of unlabeled data for each NST iteration')
 parser.add_argument('--cross_attn', type=bool, default=False, help='Cross attention')
 parser.add_argument('--use_MINE', type=bool, default=False, help='Use MINE loss')
+parser.add_argument('--percent', type=float, default=1.0, help='Use a percentage of training data')
 args = parser.parse_args()
 
 moldataset = args.moldataset
@@ -300,7 +301,7 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 if fusion and use_MINE:
     save_dir = f'./results/{GNN}_{moldataset}_mine_fusion_checkpoint'
 elif fusion and NST:
-    save_dir = f'./results/{GNN}_{moldataset}_fusion_nst_checkpoint'
+    save_dir = f'./results/{GNN}_{moldataset}_fusion_nst_{args.percent}_checkpoint'
 elif fusion:
     save_dir = f'./results/{GNN}_{moldataset}_fusion_checkpoint'
 elif use_MINE:
@@ -310,7 +311,7 @@ elif NST:
 elif cross_attn:
     save_dir = f'./results/{GNN}_{moldataset}_attn_checkpoint'
 else:
-    save_dir = f'./results/{GNN}_{moldataset}_checkpoint'
+    save_dir = f'./results/{GNN}_{moldataset}_{args.percent}_checkpoint'
 os.makedirs(save_dir, exist_ok=True)
 
 # Load all unique unlabeled SMILES once
@@ -354,6 +355,23 @@ for i, (torch_seed, data_seed) in enumerate(seed_combinations):
         seed=data_seed,
         generator=g,
     )
+
+    # Randomly select percent% of training data
+    if args.percent < 1.0:
+        train_size = len(train_loader.dataset)
+        selected_size = int(train_size * args.percent)
+        np.random.seed(mlp_seed)
+        selected_indices = np.random.choice(train_size, selected_size, replace=False)
+        train_subset = torch.utils.data.Subset(train_loader.dataset, selected_indices)
+        train_loader = torch.utils.data.DataLoader(
+            train_subset,
+            batch_size=50,
+            shuffle=True,
+            generator=torch.Generator().manual_seed(mlp_seed),
+            collate_fn=train_loader.collate_fn,
+            num_workers=train_loader.num_workers,
+            pin_memory=getattr(train_loader, "pin_memory", False),
+        )
 
     attn_kwargs = {'dropout': 0.0}
     if GNN == 'chemprop':
@@ -440,6 +458,15 @@ for i, (torch_seed, data_seed) in enumerate(seed_combinations):
         X_val, y_val = get_representations(model, val_loader, fusion=fusion)
         X_test, y_test, smiles_test = get_representations(model, test_loader, smiles=True, fusion=fusion)
 
+        # Randomly select percent% of training data
+        if args.percent < 1.0:
+            train_size = X_train.shape[0]
+            selected_size = int(train_size * args.percent)
+            np.random.seed(mlp_seed)
+            selected_indices = np.random.choice(train_size, selected_size, replace=False)
+            X_train = X_train[selected_indices]
+            y_train = y_train[selected_indices]
+
         if i == 0:
             print("X_train shape:", X_train.shape)
             # print(X_train[0])
@@ -521,9 +548,6 @@ for i, (torch_seed, data_seed) in enumerate(seed_combinations):
             'Spearman': spearmanr(y_test_orig, y_test_pred).correlation,
         })
 
-        col_name = f'y_pred_{mlp_seed}'
-        all_test_preds_df[col_name] = y_test_pred
-
     else:
         # NST iterations
         # Get three non-overlapping partitions of N unique SMILES each iteration
@@ -592,7 +616,7 @@ for i, (torch_seed, data_seed) in enumerate(seed_combinations):
                     X_test_np,
                     y_test,
                     random_state=mlp_seed,
-                    scoring='r2',
+                    scoring='neg_root_mean_squared_error',
                 )
                 feat_imp = perm_result.importances_mean  # shape: (n_features,)
                 feat_importances.append(feat_imp)

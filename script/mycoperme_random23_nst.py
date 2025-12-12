@@ -297,13 +297,13 @@ os.makedirs(save_dir, exist_ok=True)
 train_df = pd.read_csv('./data/train_scaffold_split.csv')
 test_df = pd.read_csv('./data/test_scaffold_split.csv')
 
-labeled_data_descriptors = pd.read_csv('./data/preprocessed_labeled_descriptors.csv')
-# Randomly select 23 descriptors for fusion as a comparison to mtb-related descriptors
-descriptor_cols = labeled_data_descriptors.columns.drop("Smiles").tolist()
-selected_descriptors = pd.Series(descriptor_cols).sample(n=23, random_state=42).tolist()
-labeled_data_descriptors = labeled_data_descriptors[["Smiles"] + selected_descriptors]
+# labeled_data_descriptors = pd.read_csv('./data/preprocessed_labeled_descriptors.csv')
+# # Randomly select 23 descriptors for fusion as a comparison to mtb-related descriptors
+# descriptor_cols = labeled_data_descriptors.columns.drop("Smiles").tolist()
+# selected_descriptors = pd.Series(descriptor_cols).sample(n=23, random_state=42).tolist()
+# labeled_data_descriptors = labeled_data_descriptors[["Smiles"] + selected_descriptors]
 
-descriptor_names = labeled_data_descriptors.columns.drop("Smiles").tolist()
+# descriptor_names = labeled_data_descriptors.columns.drop("Smiles").tolist()
 
 # Load all unique unlabeled SMILES once
 df_unlabeled = pd.read_excel("/work/pi_annagreen_umass_edu/shiyun/MycoPermeNet/data/Prep notebook (Seigrist).xlsx",
@@ -411,6 +411,14 @@ for i, (torch_seed, data_seed) in enumerate(seed_combinations):
     X_test, y_test = get_representations(model, test_loader, smile=fusion)
 
     if fusion:
+        labeled_data_descriptors = pd.read_csv('./data/preprocessed_labeled_descriptors.csv')
+        # Randomly select 23 descriptors for fusion as a comparison to mtb-related descriptors
+        descriptor_cols = labeled_data_descriptors.columns.drop("Smiles").tolist()
+        selected_descriptors = pd.Series(descriptor_cols).sample(n=23, random_state=mlp_seed).tolist()
+        labeled_data_descriptors = labeled_data_descriptors[["Smiles"] + selected_descriptors]
+
+        descriptor_names = labeled_data_descriptors.columns.drop("Smiles").tolist()
+
         # Fusion concatenation
         descriptor_df = labeled_data_descriptors.groupby('Smiles').first().reset_index()
 

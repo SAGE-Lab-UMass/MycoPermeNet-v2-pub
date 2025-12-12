@@ -3,11 +3,11 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 from scipy.stats import wilcoxon
+from statsmodels.stats.multitest import multipletests
 
 
-# Load data
 baseline_df = pd.read_csv('./results/chemprop_permeability_checkpoint/chemprop_test_performance.csv')
-baseline_nst_df = pd.read_csv('./results/chemprop_permeability_nst_500_checkpoint/chemprop_test_performance.csv')
+baseline_nst_df = pd.read_csv('./results/chemprop_permeability_nst_checkpoint/chemprop_test_performance.csv')
 baseline_fnst_df = pd.read_csv('./results/chemprop_permeability_fusion_nst_checkpoint/chemprop_test_performance.csv')
 
 
@@ -47,7 +47,34 @@ def plot_r2_rmse_spearman_subplots(baseline_df, baseline_nst_df, baseline_fnst_d
     means = {m: [np.mean(raw_data[m][model]) for model in models] for m in metrics}
     stds = {m: [np.std(raw_data[m][model], ddof=1) for model in models] for m in metrics}
 
-    # significance labels
+    # ------------------------------------------------
+    # 1) 先把 3(variants)×3(metrics)=9 个检验的 raw p 算出来
+    #    family = 这 9 个 Wilcoxon 检验
+    # ------------------------------------------------
+    order = ['Baseline + Fusion', 'Baseline + NST', 'Baseline Fusion+NST']
+    p_raw_list = []
+    key_list = []   # (metric, model)
+
+    for metric in metrics:
+        baseline_vals = raw_data[metric]['Baseline']
+        for model in order:
+            vals_variant = raw_data[metric][model]
+            alternative = "less" if metric in ["R2", "Spearman"] else "greater"
+            try:
+                stat, pval = wilcoxon(baseline_vals, vals_variant, alternative=alternative)
+            except ValueError:
+                pval = 1.0
+            p_raw_list.append(pval)
+            key_list.append((metric, model))
+
+    # Holm 校正
+    reject, p_adj_all, _, _ = multipletests(p_raw_list, method="holm")
+    # 映射 (metric, model) -> adjusted p
+    p_adj_map = {(met, mod): p_adj for (met, mod), p_adj in zip(key_list, p_adj_all)}
+
+    # ------------------------------------------------
+    # 2) 画图时用 adjusted p 来决定星号
+    # ------------------------------------------------
     p_value_labels = [(0.0001, "****"), (0.001, "***"), (0.01, "**"), (0.05, "*")]
 
     def get_sig_label(p):
@@ -63,36 +90,32 @@ def plot_r2_rmse_spearman_subplots(baseline_df, baseline_nst_df, baseline_fnst_d
         ax = axes[m_idx]
         x = np.arange(len(models))
 
-        # draw errorbar (mean ± std)
+        # error bar (mean ± std)
         for j in range(len(models)):
-            ax.errorbar(x[j], means[metric][j], yerr=stds[metric][j],
-                        fmt='o', color=model_colors[j], alpha=0.8,
-                        capsize=4, elinewidth=2)
+            ax.errorbar(
+                x[j], means[metric][j], yerr=stds[metric][j],
+                fmt='o', color=model_colors[j], alpha=0.8,
+                capsize=4, elinewidth=2
+            )
 
-        # wilcoxon test baseline vs others
         baseline_vals = raw_data[metric]['Baseline']
-        order = ['Baseline + Fusion', 'Baseline + NST', 'Baseline Fusion+NST']  # bottom → top
-        # The highest point among all models' mean + std
+        # 最高的 mean+std，为画横线确定起始高度
         y_max = max(means[metric][i] + stds[metric][i] for i in range(len(models)))
         h = 0.002
         increment = 0.006
 
         for k, model in enumerate(order):
             vals_variant = raw_data[metric][model]
-            alternative = "less" if metric in ["R2", "Spearman"] else "greater"
-            try:
-                stat, pval = wilcoxon(baseline_vals, vals_variant, alternative=alternative)
-            except ValueError:
-                pval = 1.0
-            label = get_sig_label(pval)
+            pval_adj = p_adj_map[(metric, model)]
+            label = get_sig_label(pval_adj)
 
             j = models.index(model)
-
             base_y = y_max + k * increment
 
             x1, x2 = 0, j
             ax.plot([x1, x1, x2, x2],
-                    [base_y, base_y + h, base_y + h, base_y], lw=1.2, c='k')
+                    [base_y, base_y + h, base_y + h, base_y],
+                    lw=1.2, c='k')
             ax.text((x1 + x2) * 0.5, base_y + h * 0.8, label,
                     ha='center', va='bottom', color='k', fontsize=14)
 
@@ -100,14 +123,12 @@ def plot_r2_rmse_spearman_subplots(baseline_df, baseline_nst_df, baseline_fnst_d
             ax.set_ylabel(f"{metric_labels[m_idx]} $(\\leftarrow)$", fontsize=16)
         else:
             ax.set_ylabel(f"{metric_labels[m_idx]} $(\\rightarrow)$", fontsize=16)
-        # ax.grid(axis='y', alpha=0.3)
 
     axes[-1].set_xticks(x)
     axes[-1].set_xticklabels(models, fontsize=14, rotation=20)
 
     plt.tight_layout()
     plt.savefig('./plots/mycoperme_metrics_p.pdf')
-    plt.savefig('./plots/mycoperme_metrics_p.eps', dpi=600, bbox_inches='tight')
     plt.close()
 
 

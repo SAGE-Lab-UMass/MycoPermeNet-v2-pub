@@ -64,7 +64,7 @@ for model in models:
             else:
                 values = np.array(values)
                 mean_val = values.mean()
-                cell = f"{mean_val:.3f} $\\pm$ {values.std():.3f}"
+                cell = f"{mean_val:.3f}$\\pm${values.std(ddof=1):.3f}"
                 # Bold the best
                 if np.isclose(mean_val, best_per_dataset[dataset]):
                     cell = f"\\textbf{{{cell}}}"

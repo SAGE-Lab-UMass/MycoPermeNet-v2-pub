@@ -22,6 +22,7 @@ from torch.nn import Linear, ReLU, Sequential, Dropout, MSELoss
 
 from torch_geometric.nn import global_mean_pool
 
+from sklearn.inspection import permutation_importance
 from sklearn.metrics import r2_score, root_mean_squared_error
 from scipy.stats import spearmanr
 
@@ -197,7 +198,7 @@ def evaluate(model, loader):
 
 
 @torch.no_grad()
-def get_representations(model, loader, NST=False, scaler=None, smile=False, fusion_nst=False):
+def get_representations(model, loader, NST=False, scaler=None, smile=False, fusion_nst=False, smiles_test=False):
     model.eval()
     smiles_list = []
     embeddings = []
@@ -245,7 +246,10 @@ def get_representations(model, loader, NST=False, scaler=None, smile=False, fusi
         df_embed = pd.DataFrame(X, columns=embed_columns + desc_columns)
 
     if not NST:
-        return df_embed, y
+        if smiles_test:
+            return df_embed, y, smiles_list
+        else:
+            return df_embed, y
     else:
         return df_embed
 
@@ -278,13 +282,14 @@ seed_combinations = list(itertools.product(torch_seeds, data_seeds))
 
 results = []
 val_results = []
+feat_importances = []
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 if fusion and use_MINE:
     save_dir = f'./results/{GNN}_permeability_mine_fusion_checkpoint'
 elif fusion and NST:
-    save_dir = f'./results/{GNN}_permeability_fusion_nst_checkpoint'
+    save_dir = f'./results/{GNN}_permeability_fusion_nst_checkpoint_new'
 elif fusion:
     save_dir = f'./results/{GNN}_permeability_fusion_checkpoint'
 elif use_MINE:
@@ -313,6 +318,7 @@ nst_iterations = 3
 total_required = nst_iterations * NST_volume
 assert len(unique_unlabeled_smiles) >= total_required, "Not enough unique SMILES for all iterations without overlap."
 
+all_test_preds_df = None
 
 for i, (torch_seed, data_seed) in enumerate(seed_combinations):
     mlp_seed = mlp_seeds[i]
@@ -417,7 +423,7 @@ for i, (torch_seed, data_seed) in enumerate(seed_combinations):
     # Load the best model for final evaluation
     model.load_state_dict(torch.load(os.path.join(save_dir, 'best_model.pt')))
 
-    train_loader, val_loader, test_loader = get_emb_dataloaders(
+    train_loader, val_loader, test_loader, target_scaler = get_emb_dataloaders(
         train_val_dataset=train_val_dataset_orig,
         test_dataset=test_dataset_orig,
         seed=mlp_seed,
@@ -425,7 +431,11 @@ for i, (torch_seed, data_seed) in enumerate(seed_combinations):
 
     X_train, y_train = get_representations(model, train_loader, smile=fusion)
     X_val, y_val = get_representations(model, val_loader, smile=fusion)
-    X_test, y_test = get_representations(model, test_loader, smile=fusion)
+    X_test, y_test, smiles_test = get_representations(model, test_loader, smile=fusion, smiles_test=True)
+
+    if i == 0:
+        y_test_orig = target_scaler.inverse_transform(np.asarray(y_test).reshape(-1, 1)).ravel()
+    y_val_orig = target_scaler.inverse_transform(np.asarray(y_val).reshape(-1, 1)).ravel()
 
     if fusion:
         # Fusion concatenation
@@ -458,30 +468,41 @@ for i, (torch_seed, data_seed) in enumerate(seed_combinations):
 
     y_val_pred = mlp_optimal.predict(X_val)
     y_test_pred = mlp_optimal.predict(X_test)
+    y_val_pred = target_scaler.inverse_transform(np.asarray(y_val_pred).reshape(-1, 1)).ravel()
+    y_test_pred = target_scaler.inverse_transform(np.asarray(y_test_pred).reshape(-1, 1)).ravel()
     val_preds[0] = y_val_pred
     test_preds[0] = y_test_pred
 
-    print(f'Val R2: {r2_score(y_val, y_val_pred)} | RMSE: {root_mean_squared_error(y_val, y_val_pred)}')
-    print(f'Test R2: {r2_score(y_test, y_test_pred)} | RMSE: {root_mean_squared_error(y_test, y_test_pred)}')
+    print(f'Val R2: {r2_score(y_val_orig, y_val_pred)} | RMSE: {root_mean_squared_error(y_val_orig, y_val_pred)}')
+    print(f'Test R2: {r2_score(y_test_orig, y_test_pred)} | RMSE: {root_mean_squared_error(y_test_orig, y_test_pred)}')
+
+    if all_test_preds_df is None:
+        all_test_preds_df = pd.DataFrame({
+            'Smiles': smiles_test,
+            'y_true': y_test_orig
+        })
 
     if not NST:
         val_results.append({
             'Torch Seed': torch_seed,
             'Data Seed': data_seed,
             'MLP Seed': mlp_seed,
-            'R2': r2_score(y_val, y_val_pred),
-            'RMSE': root_mean_squared_error(y_val, y_val_pred),
-            'Spearman': spearmanr(y_val, y_val_pred).correlation,
+            'R2': r2_score(y_val_orig, y_val_pred),
+            'RMSE': root_mean_squared_error(y_val_orig, y_val_pred),
+            'Spearman': spearmanr(y_val_orig, y_val_pred).correlation,
         })
 
         results.append({
             'Torch Seed': torch_seed,
             'Data Seed': data_seed,
             'MLP Seed': mlp_seed,
-            'R2': r2_score(y_test, y_test_pred),
-            'RMSE': root_mean_squared_error(y_test, y_test_pred),
-            'Spearman': spearmanr(y_test, y_test_pred).correlation,
+            'R2': r2_score(y_test_orig, y_test_pred),
+            'RMSE': root_mean_squared_error(y_test_orig, y_test_pred),
+            'Spearman': spearmanr(y_test_orig, y_test_pred).correlation,
         })
+
+        col_name = f'y_pred_{mlp_seed}'
+        all_test_preds_df[col_name] = y_test_pred
 
     else:
         # NST iterations
@@ -529,13 +550,33 @@ for i, (torch_seed, data_seed) in enumerate(seed_combinations):
             # Save predictions
             y_val_pred = mlp_optimal.predict(X_val)
             y_test_pred = mlp_optimal.predict(X_test)
+            y_val_pred = target_scaler.inverse_transform(np.asarray(y_val_pred).reshape(-1, 1)).ravel()
+            y_test_pred = target_scaler.inverse_transform(np.asarray(y_test_pred).reshape(-1, 1)).ravel()
             val_preds[iter_i] = y_val_pred
             test_preds[iter_i] = y_test_pred
 
             print(f"NST Iteration {iter_i}")
             print(X_nst.shape)
-            print(f'Val R2: {r2_score(y_val, y_val_pred)} | RMSE: {root_mean_squared_error(y_val, y_val_pred)}')
-            print(f'Test R2: {r2_score(y_test, y_test_pred)} | RMSE: {root_mean_squared_error(y_test, y_test_pred)}')
+            print(f'Val R2: {r2_score(y_val_orig, y_val_pred)} | RMSE: {root_mean_squared_error(y_val_orig, y_val_pred)}')
+            print(f'Test R2: {r2_score(y_test_orig, y_test_pred)} | RMSE: {root_mean_squared_error(y_test_orig, y_test_pred)}')
+
+            # Save the best test predictions for iteration 2
+            if iter_i == 2 and fusion:
+                col_name = f'y_pred_{mlp_seed}'
+                all_test_preds_df[col_name] = y_test_pred
+
+                # feature importance
+                X_test_np = X_test.values if isinstance(X_test, pd.DataFrame) else X_test
+
+                perm_result = permutation_importance(
+                    mlp_optimal,
+                    X_test_np,
+                    y_test,
+                    random_state=mlp_seed,
+                    scoring='r2',
+                )
+                feat_imp = perm_result.importances_mean  # shape: (n_features,)
+                feat_importances.append(feat_imp)
 
         val_result_entry = {
             'Torch Seed': torch_seed,
@@ -543,9 +584,9 @@ for i, (torch_seed, data_seed) in enumerate(seed_combinations):
             'MLP Seed': mlp_seed,
         }
         for iter_i in range(nst_iterations + 1):
-            val_result_entry[f'Iter{iter_i} R2'] = r2_score(y_val, val_preds[iter_i])
-            val_result_entry[f'Iter{iter_i} RMSE'] = root_mean_squared_error(y_val, val_preds[iter_i])
-            val_result_entry[f'Iter{iter_i} Spearman'] = spearmanr(y_val, val_preds[iter_i]).correlation
+            val_result_entry[f'Iter{iter_i} R2'] = r2_score(y_val_orig, val_preds[iter_i])
+            val_result_entry[f'Iter{iter_i} RMSE'] = root_mean_squared_error(y_val_orig, val_preds[iter_i])
+            val_result_entry[f'Iter{iter_i} Spearman'] = spearmanr(y_val_orig, val_preds[iter_i]).correlation
         val_results.append(val_result_entry)
 
         result_entry = {
@@ -554,9 +595,9 @@ for i, (torch_seed, data_seed) in enumerate(seed_combinations):
             'MLP Seed': mlp_seed,
         }
         for iter_i in range(nst_iterations + 1):
-            result_entry[f'Iter{iter_i} R2'] = r2_score(y_test, test_preds[iter_i])
-            result_entry[f'Iter{iter_i} RMSE'] = root_mean_squared_error(y_test, test_preds[iter_i])
-            result_entry[f'Iter{iter_i} Spearman'] = spearmanr(y_test, test_preds[iter_i]).correlation
+            result_entry[f'Iter{iter_i} R2'] = r2_score(y_test_orig, test_preds[iter_i])
+            result_entry[f'Iter{iter_i} RMSE'] = root_mean_squared_error(y_test_orig, test_preds[iter_i])
+            result_entry[f'Iter{iter_i} Spearman'] = spearmanr(y_test_orig, test_preds[iter_i]).correlation
         results.append(result_entry)
 
 results_df = pd.DataFrame(results)
@@ -564,3 +605,8 @@ results_df.to_csv(os.path.join(save_dir, f'{GNN}_test_performance.csv'), index=F
 
 val_results_df = pd.DataFrame(val_results)
 val_results_df.to_csv(os.path.join(save_dir, f'{GNN}_val_performance.csv'), index=False)
+
+all_test_preds_df.to_csv(os.path.join(save_dir, f'{GNN}_permeability_y_test.csv'), index=False)
+
+feat_importances = np.array(feat_importances)  # shape: (n_runs, n_features)
+np.save(os.path.join(save_dir, f'{GNN}_permeability_feature_importances.npy'), feat_importances)

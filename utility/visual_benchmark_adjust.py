@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.stats import wilcoxon
 from matplotlib.patches import Patch
-
+from statsmodels.stats.multitest import multipletests
 
 models = ["GCN", "GINE", "chemprop", "AttentiveFP"]
 datasets = ["ESOL", "FreeSolv", "Lipo", "permeability"]
@@ -22,13 +22,19 @@ records = []
 for model in models:
     for dataset in datasets:
         for fusion in fusion_modes:
-            subdir = f"{model}_{dataset}_{fusion}_checkpoint" if fusion else f"{model}_{dataset}_checkpoint"
+            if dataset == "permeability":
+                subdir = f"{model}_{dataset}_{fusion}_checkpoint" if fusion else f"{model}_{dataset}_checkpoint"
+            else:
+                subdir = f"{model}_{dataset}_{fusion}_checkpoint" if fusion else f"{model}_{dataset}_nst_checkpoint"
             csv_path = f"./results/{subdir}/{model}_test_performance.csv"
             try:
                 df = pd.read_csv(csv_path)
                 if fusion == "":
                     # baseline
-                    rmse_values = df["RMSE"].values
+                    if dataset == "permeability":
+                        rmse_values = df["RMSE"].values
+                    else:
+                        rmse_values = df["Iter0 RMSE"].values
                 else:
                     # fusion_nst: select Iter{i} RMSE with the smallest mean
                     iter_cols = [f"Iter{i} RMSE" for i in range(1, 4) if f"Iter{i} RMSE" in df.columns]
@@ -51,6 +57,31 @@ for model in models:
 
 df_all = pd.DataFrame(records)
 
+
+p_raw_list = []
+pairs = []  # (dataset, model)
+p_adj_map = {}  # (dataset, model) -> adjusted p
+
+for dataset in datasets:
+    df_subset = df_all[df_all["Dataset"] == dataset]
+    for model in models:
+        vals_plain = df_subset[(df_subset["Model"] == model) & (df_subset["Fusion"] == "-fusion")]["RMSE"].values
+        vals_fusion = df_subset[(df_subset["Model"] == model) & (df_subset["Fusion"] == "+fusion")]["RMSE"].values
+
+        if len(vals_plain) == len(vals_fusion) and len(vals_plain) > 0:
+            stat, p_raw = wilcoxon(vals_plain, vals_fusion, alternative="two-sided")
+            p_raw_list.append(p_raw)
+            pairs.append((dataset, model))
+        else:
+            p_adj_map[(dataset, model)] = None
+
+# Holm
+if p_raw_list:
+    reject, p_adj_all, _, _ = multipletests(p_raw_list, method="holm")
+    for (dataset, model), p_adj in zip(pairs, p_adj_all):
+        p_adj_map[(dataset, model)] = p_adj
+
+# adjusted p
 fig, axes = plt.subplots(nrows=2, ncols=2, figsize=(16, 12), sharex=True)
 p_value_labels = [(0.0001, "****"), (0.001, "***"), (0.01, "**"), (0.05, "*")]
 
@@ -65,49 +96,50 @@ for i, dataset in enumerate(datasets):
     # boxplot
     for j, model in enumerate(models):
         for k, fusion in enumerate(["-fusion", "+fusion"]):
-            rmse_vals = df_subset[(df_subset["Model"] == model) & (df_subset["Fusion"] == fusion)]["RMSE"]
+            rmse_vals = df_subset[(df_subset["Model"] == model) & (df_subset["Fusion"] == fusion)]["RMSE"].values
             if len(rmse_vals) == 0:
                 continue
             x_pos = j + (k - 0.5) * 0.2
             color = fusion_palette[(model, fusion)]
             hatch = '//' if fusion == '+fusion' else None
-            ax.boxplot(rmse_vals, positions=[x_pos], widths=0.1,
-                       patch_artist=True,
-                       boxprops=dict(facecolor=color, color="black", hatch=hatch),
-                       medianprops=dict(color="black"),
-                       whiskerprops=dict(color="black"),
-                       capprops=dict(color="black"),
-                       flierprops=dict(markerfacecolor=color, markeredgecolor="black", alpha=0.4))
+            ax.boxplot(
+                rmse_vals,
+                positions=[x_pos],
+                widths=0.1,
+                patch_artist=True,
+                boxprops=dict(facecolor=color, color="black", hatch=hatch),
+                medianprops=dict(color="black"),
+                whiskerprops=dict(color="black"),
+                capprops=dict(color="black"),
+                flierprops=dict(markerfacecolor=color, markeredgecolor="black", alpha=0.4)
+            )
 
     if col == 0:
-        ax.set_ylabel("RMSE $(\leftarrow)$", fontsize=16)
+        ax.set_ylabel("RMSE $(\\leftarrow)$", fontsize=16)
     ax.set_title(f"{display_dataset}", fontsize=16)
     ax.set_xticks(range(len(models)))
     ax.set_xticklabels([m if m != "chemprop" else "Chemprop" for m in models], fontsize=16)
 
-    # Wilcoxon test + asterisks
     for j, model in enumerate(models):
-        vals_plain = df_subset[(df_subset["Model"] == model) & (df_subset["Fusion"] == "-fusion")]["RMSE"]
-        vals_fusion = df_subset[(df_subset["Model"] == model) & (df_subset["Fusion"] == "+fusion")]["RMSE"]
+        vals_plain = df_subset[(df_subset["Model"] == model) & (df_subset["Fusion"] == "-fusion")]["RMSE"].values
+        vals_fusion = df_subset[(df_subset["Model"] == model) & (df_subset["Fusion"] == "+fusion")]["RMSE"].values
 
         if len(vals_plain) == len(vals_fusion) and len(vals_plain) > 0:
-            try:
-                stat, p = wilcoxon(vals_plain, vals_fusion, alternative="two-sided")
-                # print("Dataset:", dataset, "Model:", model, "Wilcoxon p-value:", p)
-                label = "ns"
-                for p_cut, sym in p_value_labels:
-                    if p <= p_cut:
-                        label = sym
-                        break
-                y = max(vals_plain.max(), vals_fusion.max()) + 0.02
-                h = 0.02
-                x1, x2 = j - 0.1, j + 0.1
-                ax.plot([x1, x1, x2, x2], [y, y + h, y + h, y], lw=1, c='k')
-                ax.text((x1 + x2) * 0.5, y + h, label, ha='center', va='bottom', color='k', fontsize=16)
-            except Exception as e:
-                print(f"Wilcoxon error on {model}-{dataset}: {e}")
+            p_adj = p_adj_map.get((dataset, model), None)
+            if p_adj is None:
+                continue
 
-# plt.tight_layout()
+            label = "ns"
+            for p_cut, sym in p_value_labels:
+                if p_adj <= p_cut:
+                    label = sym
+                    break
+
+            y = max(vals_plain.max(), vals_fusion.max()) + 0.02
+            h = 0.02
+            x1, x2 = j - 0.1, j + 0.1
+            ax.plot([x1, x1, x2, x2], [y, y + h, y + h, y], lw=1, c='k')
+            ax.text((x1 + x2) * 0.5, y + h, label, ha='center', va='bottom', color='k', fontsize=16)
 
 legend_elements = [
     Patch(facecolor="grey", edgecolor="black", label="Baseline"),
@@ -117,4 +149,3 @@ fig.legend(handles=legend_elements, loc='upper center', ncol=2, fontsize=16, fra
 
 plt.tight_layout(rect=[0, 0, 1, 0.96])
 plt.savefig("./plots/benchmark_rmse.pdf")
-plt.savefig("./plots/benchmark_rmse.eps", dpi=600, bbox_inches='tight')

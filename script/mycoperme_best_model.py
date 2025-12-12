@@ -282,7 +282,7 @@ val_results = []
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-save_dir = f'./model'
+save_dir = './model'
 os.makedirs(save_dir, exist_ok=True)
 
 train_df = pd.read_csv('./data/train_scaffold_split.csv')
@@ -304,6 +304,9 @@ nst_iterations = 3
 total_required = nst_iterations * NST_volume
 assert len(unique_unlabeled_smiles) >= total_required, "Not enough unique SMILES for all iterations without overlap."
 
+all_train_preds_df = None
+all_val_preds_df = None
+all_test_preds_df = None
 
 for i, (torch_seed, data_seed) in enumerate(seed_combinations):
     mlp_seed = mlp_seeds[i]
@@ -408,15 +411,23 @@ for i, (torch_seed, data_seed) in enumerate(seed_combinations):
     # Load the best model for final evaluation
     model.load_state_dict(torch.load(os.path.join(save_dir, 'best_GNN.pt')))
 
-    train_loader, val_loader, test_loader = get_emb_dataloaders(
+    train_loader, val_loader, test_loader, target_scaler = get_emb_dataloaders(
         train_val_dataset=train_val_dataset_orig,
         test_dataset=test_dataset_orig,
         seed=mlp_seed,
     )
+    torch.save(target_scaler, os.path.join(save_dir, 'target_scaler.pt'))
 
     X_train, y_train = get_representations(model, train_loader, smile=fusion)
     X_val, y_val = get_representations(model, val_loader, smile=fusion)
     X_test, y_test = get_representations(model, test_loader, smile=fusion)
+
+    train_smiles = X_train['Smiles'].copy().reset_index(drop=True)
+    val_smiles = X_val['Smiles'].copy().reset_index(drop=True)
+    test_smiles = X_test['Smiles'].copy().reset_index(drop=True)
+    y_train_orig = target_scaler.inverse_transform(np.asarray(y_train).reshape(-1, 1)).ravel()
+    y_val_orig = target_scaler.inverse_transform(np.asarray(y_val).reshape(-1, 1)).ravel()
+    y_test_orig = target_scaler.inverse_transform(np.asarray(y_test).reshape(-1, 1)).ravel()
 
     if fusion:
         # Fusion concatenation
@@ -441,9 +452,9 @@ for i, (torch_seed, data_seed) in enumerate(seed_combinations):
 
     mlp_model = MLPRegressor(input_dim=X_train.shape[1], hidden_layer_sizes=(128, 64, 16))
     mlp_optimal = mlp_model.fit(X_train, y_train, X_val, y_val,
-                            alpha=0.01, batch_size=64, learning_rate_init=0.0005,
-                            random_state=mlp_seed, early_stopping=True,
-                            patience=10, max_epochs=100)
+                                alpha=0.01, batch_size=64, learning_rate_init=0.0005,
+                                random_state=mlp_seed, early_stopping=True,
+                                patience=10, max_epochs=100)
 
     if i == 0:
         print(mlp_model)
@@ -458,6 +469,24 @@ for i, (torch_seed, data_seed) in enumerate(seed_combinations):
 
     print(f'Val R2: {r2_score(y_val, y_val_pred)} | RMSE: {root_mean_squared_error(y_val, y_val_pred)}')
     print(f'Test R2: {r2_score(y_test, y_test_pred)} | RMSE: {root_mean_squared_error(y_test, y_test_pred)}')
+
+    if all_train_preds_df is None:
+        all_train_preds_df = pd.DataFrame({
+            'Smiles': train_smiles,
+            'y_true': y_train_orig
+        })
+
+    if all_val_preds_df is None:
+        all_val_preds_df = pd.DataFrame({
+            'Smiles': val_smiles,
+            'y_true': y_val_orig
+        })
+
+    if all_test_preds_df is None:
+        all_test_preds_df = pd.DataFrame({
+            'Smiles': test_smiles,
+            'y_true': y_test_orig
+        })
 
     if not NST:
         val_results.append({
@@ -535,6 +564,17 @@ for i, (torch_seed, data_seed) in enumerate(seed_combinations):
                 torch.save(mlp_optimal.state_dict(), os.path.join(save_dir, 'optimal_mlp.pt'))
                 joblib.dump(X_nst.columns.tolist(), os.path.join(save_dir, 'mlp_feature_cols.pkl'))
 
+                # Save the best predictions for iteration 2
+                y_train_pred_orig = target_scaler.inverse_transform(np.asarray(mlp_optimal.predict(X_train)).reshape(-1, 1)).ravel()
+                col_name = f'y_pred_{mlp_seed}'
+                all_train_preds_df[col_name] = y_train_pred_orig
+
+                y_val_pred_orig = target_scaler.inverse_transform(np.asarray(y_val_pred).reshape(-1, 1)).ravel()
+                all_val_preds_df[col_name] = y_val_pred_orig
+
+                y_test_pred_orig = target_scaler.inverse_transform(np.asarray(y_test_pred).reshape(-1, 1)).ravel()
+                all_test_preds_df[col_name] = y_test_pred_orig
+
         val_result_entry = {
             'Torch Seed': torch_seed,
             'Data Seed': data_seed,
@@ -558,7 +598,19 @@ for i, (torch_seed, data_seed) in enumerate(seed_combinations):
         results.append(result_entry)
 
 results_df = pd.DataFrame(results)
-results_df.to_csv(os.path.join(save_dir, f'best_test_performance.csv'), index=False)
+results_df.to_csv(os.path.join(save_dir, 'best_test_performance.csv'), index=False)
 
 val_results_df = pd.DataFrame(val_results)
-val_results_df.to_csv(os.path.join(save_dir, f'best_val_performance.csv'), index=False)
+val_results_df.to_csv(os.path.join(save_dir, 'best_val_performance.csv'), index=False)
+
+all_train_preds_df.to_csv(os.path.join(save_dir, 'best_permeability_y_train.csv'), index=False)
+all_val_preds_df.to_csv(os.path.join(save_dir, 'best_permeability_y_val.csv'), index=False)
+all_test_preds_df.to_csv(os.path.join(save_dir, 'best_permeability_y_test.csv'), index=False)
+
+# Merge all prediction dfs into one
+all_train_preds_df['Dataset'] = 'Train'
+all_val_preds_df['Dataset'] = 'Val'
+all_test_preds_df['Dataset'] = 'Test'
+
+all_preds_df = pd.concat([all_train_preds_df, all_val_preds_df, all_test_preds_df], axis=0)
+all_preds_df.to_csv(os.path.join(save_dir, 'best_permeability_y.csv'), index=False)

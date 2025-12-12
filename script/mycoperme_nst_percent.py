@@ -1,13 +1,11 @@
-"MycoPermeNet-v2 pipeline for MoleculeNet benchmark."
+"MycoPermeNet-v2 pipeline for permeaibility dataset, a percent of training samples."
 
 from data_tools.pyg_chemprop_utils import (initialize_weights, directed_mp,
                                            aggregate_at_nodes, NoamLR, get_dataset,
                                            get_dataloaders, get_emb_dataloaders,
-                                           get_dataset_from_molnet, get_dataloaders_from_molnet,
-                                           get_emb_dataloaders_from_molnet,
                                            get_dataset_from_mlsmr, get_dataloaders_from_mlsmr)
 from models import MINE
-from models.mlp import MLPRegressor, CrossAttnMLPRegressor
+from models.mlp import MLPRegressor
 from models.GNNs import AttentiveFP, GINE, GCN
 
 from tqdm import tqdm
@@ -22,9 +20,8 @@ import argparse
 import torch
 from torch.nn import Linear, ReLU, Sequential, Dropout, MSELoss
 
-from torch_geometric.nn import GINEConv, global_mean_pool, GPSConv, global_add_pool
+from torch_geometric.nn import global_mean_pool
 
-from sklearn.inspection import permutation_importance
 from sklearn.metrics import r2_score, root_mean_squared_error
 from scipy.stats import spearmanr
 
@@ -85,9 +82,9 @@ class DMPNNEncoder(torch.nn.Module):
         node_attr = self.act_func(self.W3(z))
 
         # readout: pyg global pooling
-        emb = global_mean_pool(node_attr, batch)
+        x = global_mean_pool(node_attr, batch)
 
-        return self.mlp(emb), emb
+        return self.mlp(x), x
 
     def representation(self, data):
         x, edge_index, revedge_index, edge_attr, num_nodes, batch = (
@@ -200,7 +197,7 @@ def evaluate(model, loader):
 
 
 @torch.no_grad()
-def get_representations(model, loader, NST=False, scaler=None, smiles=False, fusion=False, cross_attn=False):
+def get_representations(model, loader, NST=False, scaler=None, smile=False, fusion_nst=False):
     model.eval()
     smiles_list = []
     embeddings = []
@@ -211,7 +208,7 @@ def get_representations(model, loader, NST=False, scaler=None, smiles=False, fus
         data = data.to(device)
 
         # Forward to get representations
-        rep = model.representation(data)  # shape: (B, dim)
+        rep = model.representation(data)  # shape: (batch_size, dim)
         embeddings.append(rep.cpu().numpy())
 
         if not NST:
@@ -222,7 +219,7 @@ def get_representations(model, loader, NST=False, scaler=None, smiles=False, fus
             y_list.append(y)
 
         # (optional) get descriptor vector for fusion
-        if (fusion and hasattr(data, 'rdkit')) or cross_attn:
+        if fusion_nst and hasattr(data, 'rdkit'):
             desc = data.rdkit.cpu().numpy()  # shape: (B, D2)
             desc_list.append(desc)
 
@@ -231,87 +228,82 @@ def get_representations(model, loader, NST=False, scaler=None, smiles=False, fus
         smiles_list.extend(smiles_batch)
 
     # Stack all embeddings and labels
-    X = np.concatenate(embeddings)  # shape: (N, emb_dim)
+    embeddings = np.concatenate(embeddings)  # shape: (N, emb_dim)
     if not NST:
         y = np.concatenate(y_list)               # shape: (N,)
 
-    if fusion:
-        X_desc = np.concatenate(desc_list)  # (N, D2)
-        X = np.concatenate([X, X_desc], axis=1)
+    df_embed = pd.DataFrame(embeddings, columns=[f'ft_{i}' for i in range(embeddings.shape[1])])
 
-    if NST:
-        return X
-    elif smiles:
-        return X, y, smiles_list
-    elif cross_attn:
+    if smile:
+        df_embed.insert(0, "Smiles", smiles_list)  # insert at column 0
+
+    if fusion_nst:
         X_desc = np.concatenate(desc_list)  # (N, D2)
-        return X, X_desc, y
+        X = np.concatenate([embeddings, X_desc], axis=1)
+        embed_columns = [f'ft_{i}' for i in range(embeddings.shape[1])]
+        desc_columns = descriptor_names
+        df_embed = pd.DataFrame(X, columns=embed_columns + desc_columns)
+
+    if not NST:
+        return df_embed, y
     else:
-        return X, y
+        return df_embed
 
 
 parser = argparse.ArgumentParser(description='MoleculeNet benckmark')
-parser.add_argument('--moldataset', type=str, default='Lipo', help='MoleculeNet dataset')
 parser.add_argument('--GNN', type=str, default='chemprop', help='First-stage GNN')
 parser.add_argument('--fusion', type=bool, default=False, help='Fuse RDKit descriptors')
 parser.add_argument('--NST', type=bool, default=False, help='semi-supervised noisy student self-distillation')
-parser.add_argument('--NST_volume', type=int, default=1000, help='Number of unlabeled data for each NST iteration')
-parser.add_argument('--cross_attn', type=bool, default=False, help='Cross attention')
 parser.add_argument('--use_MINE', type=bool, default=False, help='Use MINE loss')
+parser.add_argument('--NST_volume', type=int, default=1000, help='Number of unlabeled data for each NST iteration')
+parser.add_argument('--percent', type=float, default=1.0, help='Use a percentage of training data')
 args = parser.parse_args()
 
-moldataset = args.moldataset
 GNN = args.GNN
 fusion = args.fusion
 NST = args.NST
-NST_volume = args.NST_volume
-cross_attn = args.cross_attn
 use_MINE = args.use_MINE
-
-if moldataset == 'ESOL':
-    repeat_time = 7
-    combined_weight = 0.13949386065204183
-elif moldataset == 'FreeSolv':
-    repeat_time = 7
-    combined_weight = 0.7851759613930136
-elif moldataset == 'permeability':
-    repeat_time = 7
-elif moldataset == 'Lipo':
-    repeat_time = 3
+NST_volume = args.NST_volume
 
 # Seed combinations
 all_seeds = list(range(42, 92))
 random.seed(42)  # For reproducibility
-torch_seeds = random.sample(all_seeds, repeat_time)
-data_seeds = random.sample(all_seeds, repeat_time)
+torch_seeds = random.sample(all_seeds, 7)
+data_seeds = random.sample(all_seeds, 7)
 
 print("Torch Seeds:", torch_seeds)
 print("Data Seeds:", data_seeds)
 
-mlp_seeds = random.sample(range(100, 200), repeat_time**2)
+mlp_seeds = random.sample(range(100, 200), 49)
 seed_combinations = list(itertools.product(torch_seeds, data_seeds))
 
 results = []
 val_results = []
-feat_importances = []
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 if fusion and use_MINE:
-    save_dir = f'./results/{GNN}_{moldataset}_mine_fusion_checkpoint'
+    save_dir = f'./results/{GNN}_permeability_mine_fusion_checkpoint'
 elif fusion and NST:
-    save_dir = f'./results/{GNN}_{moldataset}_fusion_nst_checkpoint'
+    save_dir = f'./results/{GNN}_permeability_fusion_nst_{args.percent}_checkpoint'
 elif fusion:
-    save_dir = f'./results/{GNN}_{moldataset}_fusion_checkpoint'
+    save_dir = f'./results/{GNN}_permeability_fusion_checkpoint'
 elif use_MINE:
-    save_dir = f'./results/{GNN}_{moldataset}_mine_checkpoint'
+    combined_weight = 0.06505159298527952
+    save_dir = f'./results/{GNN}_permeability_mine_checkpoint'
 elif NST:
-    save_dir = f'./results/{GNN}_{moldataset}_nst_checkpoint'
-elif cross_attn:
-    save_dir = f'./results/{GNN}_{moldataset}_attn_checkpoint'
+    save_dir = f'./results/{GNN}_permeability_nst_{NST_volume}_checkpoint'
 else:
-    save_dir = f'./results/{GNN}_{moldataset}_checkpoint'
+    save_dir = f'./results/{GNN}_permeability_{args.percent}_checkpoint'
 os.makedirs(save_dir, exist_ok=True)
+
+train_df = pd.read_csv('./data/train_scaffold_split.csv')
+test_df = pd.read_csv('./data/test_scaffold_split.csv')
+
+labeled_data_descriptors = pd.read_csv('./data/preprocessed_labeled_descriptors.csv')
+smiles_to_fingerprint = {row['Smiles']: row.iloc[1:].astype(float).values for _, row in labeled_data_descriptors.iterrows()}
+
+descriptor_names = labeled_data_descriptors.columns.drop("Smiles").tolist()
 
 # Load all unique unlabeled SMILES once
 df_unlabeled = pd.read_excel("/work/pi_annagreen_umass_edu/shiyun/MycoPermeNet/data/Prep notebook (Seigrist).xlsx",
@@ -333,27 +325,45 @@ for i, (torch_seed, data_seed) in enumerate(seed_combinations):
     g.manual_seed(torch_seed)
 
     if i == 0:
-        if use_MINE and fusion:
-            dataset, fg_dim, _ = get_dataset_from_molnet(data_name=moldataset, mine=True, fusion=True)
-        elif use_MINE:
-            dataset, fg_dim = get_dataset_from_molnet(data_name=moldataset, mine=True)
-        elif fusion or cross_attn:
-            dataset, descriptor_names = get_dataset_from_molnet(data_name=moldataset, fusion=True)
-            np.save(os.path.join(save_dir, f'{moldataset}_descriptor_names.npy'), np.array(descriptor_names, dtype=str))
+        if use_MINE:
+            train_val_dataset = get_dataset(train_df, smiles_to_fingerprint)
+            test_dataset = get_dataset(test_df, smiles_to_fingerprint)
         else:
-            dataset = get_dataset_from_molnet(data_name=moldataset)
-        torch.save(dataset, os.path.join(save_dir, 'dataset.pt'))
+            train_val_dataset = get_dataset(train_df)
+            test_dataset = get_dataset(test_df)
+        torch.save(train_val_dataset, os.path.join(save_dir, 'train_val_dataset.pt'))
+        torch.save(test_dataset, os.path.join(save_dir, 'test_dataset.pt'))
     else:
-        dataset = torch.load(os.path.join(save_dir, 'dataset.pt'))
+        train_val_dataset = torch.load(os.path.join(save_dir, 'train_val_dataset.pt'))
+        test_dataset = torch.load(os.path.join(save_dir, 'test_dataset.pt'))
 
-    dataset_orig = copy.deepcopy(dataset)
+    train_val_dataset_orig = copy.deepcopy(train_val_dataset)
+    test_dataset_orig = copy.deepcopy(test_dataset)
 
-    train_loader, val_loader, test_loader, target_scaler = get_dataloaders_from_molnet(
-        dataset=dataset,
+    train_loader, val_loader, test_loader, target_scaler = get_dataloaders(
+        train_val_dataset=train_val_dataset,
+        test_dataset=test_dataset,
         batch_size=50,
         seed=data_seed,
-        generator=g,
+        generator=g
     )
+
+    # Randomly select percent% of training data
+    if args.percent < 1.0:
+        train_size = len(train_loader.dataset)
+        selected_size = int(train_size * args.percent)
+        np.random.seed(mlp_seed)
+        selected_indices = np.random.choice(train_size, selected_size, replace=False)
+        train_subset = torch.utils.data.Subset(train_loader.dataset, selected_indices)
+        train_loader = torch.utils.data.DataLoader(
+            train_subset,
+            batch_size=50,
+            shuffle=True,
+            generator=torch.Generator().manual_seed(mlp_seed),
+            collate_fn=train_loader.collate_fn,
+            num_workers=train_loader.num_workers,
+            pin_memory=getattr(train_loader, "pin_memory", False),
+        )
 
     attn_kwargs = {'dropout': 0.0}
     if GNN == 'chemprop':
@@ -373,7 +383,7 @@ for i, (torch_seed, data_seed) in enumerate(seed_combinations):
             in_channels=133, hidden_channels=300, num_layers=5, out_channels=1,
             dropout=0.2, jk='last').to(device)
     if use_MINE:
-        mine = MINE(x_dim=300, y_dim=fg_dim, hidden_size=512).to(device)
+        mine = MINE(x_dim=300, y_dim=184, hidden_size=512).to(device)
         optimizer = torch.optim.Adam(list(model.parameters())+list(mine.parameters()),
                                      lr=0.0001, weight_decay=0)
     else:
@@ -426,55 +436,51 @@ for i, (torch_seed, data_seed) in enumerate(seed_combinations):
     # Load the best model for final evaluation
     model.load_state_dict(torch.load(os.path.join(save_dir, 'best_model.pt')))
 
-    train_loader, val_loader, test_loader, target_scaler = get_emb_dataloaders_from_molnet(
-        dataset=dataset_orig,
+    train_loader, val_loader, test_loader, target_scaler = get_emb_dataloaders(
+        train_val_dataset=train_val_dataset_orig,
+        test_dataset=test_dataset_orig,
         seed=mlp_seed,
     )
 
-    if cross_attn:
-        X_train_gnn, X_train_rdkit, y_train = get_representations(model, train_loader, cross_attn=cross_attn)
-        X_val_gnn, X_val_rdkit, y_val = get_representations(model, val_loader, cross_attn=cross_attn)
-        X_test_gnn, X_test_rdkit, y_test = get_representations(model, test_loader, cross_attn=cross_attn)
-    else:
-        X_train, y_train = get_representations(model, train_loader, fusion=fusion)
-        X_val, y_val = get_representations(model, val_loader, fusion=fusion)
-        X_test, y_test, smiles_test = get_representations(model, test_loader, smiles=True, fusion=fusion)
+    X_train, y_train = get_representations(model, train_loader, smile=fusion)
+    X_val, y_val = get_representations(model, val_loader, smile=fusion)
+    X_test, y_test = get_representations(model, test_loader, smile=fusion)
 
-        if i == 0:
-            print("X_train shape:", X_train.shape)
-            # print(X_train[0])
-            print(y_train[0])
+    # Randomly select percent% of training data
+    if args.percent < 1.0:
+        train_size = X_train.shape[0]
+        selected_size = int(train_size * args.percent)
+        np.random.seed(mlp_seed)
+        selected_indices = np.random.choice(train_size, selected_size, replace=False)
+        X_train = X_train.iloc[selected_indices].reset_index(drop=True)
+        y_train = y_train[selected_indices]
+
+    if i == 0 and fusion:
+        smiles_test = X_test['Smiles'].copy().reset_index(drop=True)
+        y_test_orig = target_scaler.inverse_transform(np.asarray(y_test).reshape(-1, 1)).ravel()
+
+    if fusion:
+        # Fusion concatenation
+        descriptor_df = labeled_data_descriptors.groupby('Smiles').first().reset_index()
+
+        X_train = X_train.merge(descriptor_df, on='Smiles', how='left')
+        X_val = X_val.merge(descriptor_df, on='Smiles', how='left')
+        X_test = X_test.merge(descriptor_df, on='Smiles', how='left')
+
+        X_train = X_train.drop(columns=['Smiles'])
+        X_val = X_val.drop(columns=['Smiles'])
+        X_test = X_test.drop(columns=['Smiles'])
 
     if i == 0:
-        y_test_orig = target_scaler.inverse_transform(np.asarray(y_test).reshape(-1, 1)).ravel()
-    y_val_orig = target_scaler.inverse_transform(np.asarray(y_val).reshape(-1, 1)).ravel()
+        print("X_train shape:", X_train.shape)
+        print(X_train.iloc[0])
+        print(y_train[0])
 
-    if cross_attn:
-        mlp_model = CrossAttnMLPRegressor(
-            gnn_dim=X_train_gnn.shape[1],
-            rdkit_dim=X_train_rdkit.shape[1],
-            hidden_dim=300,
-            attn_dim=(X_train_gnn.shape[1]+X_train_rdkit.shape[1]),
-            mlp_hidden=(128, 64, 16)
-        )
-
-        mlp_optimal = mlp_model.fit(
-            X_train_gnn, X_train_rdkit, y_train,
-            X_val_gnn, X_val_rdkit, y_val,
-            alpha=0.01,
-            learning_rate_init=0.0005,
-            batch_size=64,
-            early_stopping=True,
-            patience=10,
-            max_epochs=100,
-            random_state=mlp_seed,
-        )
-    else:
-        mlp_model = MLPRegressor(input_dim=X_train.shape[1], hidden_layer_sizes=(128, 64, 16))
-        mlp_optimal = mlp_model.fit(X_train, y_train, X_val, y_val,
-                                alpha=0.01, batch_size=64, learning_rate_init=0.0005,
-                                random_state=mlp_seed, early_stopping=True,
-                                patience=10, max_epochs=100)
+    mlp_model = MLPRegressor(input_dim=X_train.shape[1], hidden_layer_sizes=(128, 64, 16))
+    mlp_optimal = mlp_model.fit(X_train, y_train, X_val, y_val,
+                            alpha=0.01, batch_size=64, learning_rate_init=0.0005,
+                            random_state=mlp_seed, early_stopping=True,
+                            patience=10, max_epochs=100)
 
     if i == 0:
         print(mlp_model)
@@ -482,21 +488,15 @@ for i, (torch_seed, data_seed) in enumerate(seed_combinations):
     val_preds = {}
     test_preds = {}
 
-    if cross_attn:
-        y_val_pred = mlp_optimal.predict(X_val_gnn, X_val_rdkit)
-        y_test_pred = mlp_optimal.predict(X_test_gnn, X_test_rdkit)
-    else:
-        y_val_pred = mlp_optimal.predict(X_val)
-        y_test_pred = mlp_optimal.predict(X_test)
-    y_val_pred = target_scaler.inverse_transform(np.asarray(y_val_pred).reshape(-1, 1)).ravel()
-    y_test_pred = target_scaler.inverse_transform(np.asarray(y_test_pred).reshape(-1, 1)).ravel()
+    y_val_pred = mlp_optimal.predict(X_val)
+    y_test_pred = mlp_optimal.predict(X_test)
     val_preds[0] = y_val_pred
     test_preds[0] = y_test_pred
 
-    print(f'Val R2: {r2_score(y_val_orig, y_val_pred)} | RMSE: {root_mean_squared_error(y_val_orig, y_val_pred)}')
-    print(f'Test R2: {r2_score(y_test_orig, y_test_pred)} | RMSE: {root_mean_squared_error(y_test_orig, y_test_pred)}')
+    print(f'Val R2: {r2_score(y_val, y_val_pred)} | RMSE: {root_mean_squared_error(y_val, y_val_pred)}')
+    print(f'Test R2: {r2_score(y_test, y_test_pred)} | RMSE: {root_mean_squared_error(y_test, y_test_pred)}')
 
-    if all_test_preds_df is None:
+    if all_test_preds_df is None and fusion:
         all_test_preds_df = pd.DataFrame({
             'Smiles': smiles_test,
             'y_true': y_test_orig
@@ -507,22 +507,19 @@ for i, (torch_seed, data_seed) in enumerate(seed_combinations):
             'Torch Seed': torch_seed,
             'Data Seed': data_seed,
             'MLP Seed': mlp_seed,
-            'R2': r2_score(y_val_orig, y_val_pred),
-            'RMSE': root_mean_squared_error(y_val_orig, y_val_pred),
-            'Spearman': spearmanr(y_val_orig, y_val_pred).correlation,
+            'R2': r2_score(y_val, y_val_pred),
+            'RMSE': root_mean_squared_error(y_val, y_val_pred),
+            'Spearman': spearmanr(y_val, y_val_pred).correlation,
         })
 
         results.append({
             'Torch Seed': torch_seed,
             'Data Seed': data_seed,
             'MLP Seed': mlp_seed,
-            'R2': r2_score(y_test_orig, y_test_pred),
-            'RMSE': root_mean_squared_error(y_test_orig, y_test_pred),
-            'Spearman': spearmanr(y_test_orig, y_test_pred).correlation,
+            'R2': r2_score(y_test, y_test_pred),
+            'RMSE': root_mean_squared_error(y_test, y_test_pred),
+            'Spearman': spearmanr(y_test, y_test_pred).correlation,
         })
-
-        col_name = f'y_pred_{mlp_seed}'
-        all_test_preds_df[col_name] = y_test_pred
 
     else:
         # NST iterations
@@ -548,7 +545,8 @@ for i, (torch_seed, data_seed) in enumerate(seed_combinations):
                 unlabeled_dataset = torch.load(os.path.join(save_dir, f'unlabeled_dataset_{iter_i}.pt'))
 
             unlabeled_loader = get_dataloaders_from_mlsmr(unlabeled_dataset)
-            X_unlabeled = get_representations(model, unlabeled_loader, NST=NST, fusion=fusion)
+            X_unlabeled = get_representations(model, unlabeled_loader, NST=NST, fusion_nst=fusion)
+            X_unlabeled = X_unlabeled[X_nst.columns]
 
             # Predict pseudo-labels for unlabeled data
             y_unlabeled_pred = mlp_nst.predict(X_unlabeled)
@@ -556,46 +554,32 @@ for i, (torch_seed, data_seed) in enumerate(seed_combinations):
             y_unlabeled_pred += np.random.normal(0, 0.01, size=y_unlabeled_pred.shape)
 
             # Combine real + pseudo data
-            X_nst = np.concatenate([X_nst, X_unlabeled], axis=0)
+            X_nst = pd.concat([X_nst, X_unlabeled], axis=0)
             y_nst = np.concatenate([y_nst, y_unlabeled_pred], axis=0)
 
-            # Initialize new MLP and load previous weights
+            # Initialize student MLP and load previous weights
             mlp_optimal = mlp_nst.fit(X_nst, y_nst, X_val, y_val,
                                       alpha=0.01, batch_size=64, learning_rate_init=0.0005,
                                       random_state=mlp_seed, early_stopping=True,
                                       patience=10, max_epochs=100)
+            mlp_state_dict = mlp_optimal.state_dict()
 
             # Save predictions
             y_val_pred = mlp_optimal.predict(X_val)
             y_test_pred = mlp_optimal.predict(X_test)
-            y_val_pred = target_scaler.inverse_transform(np.asarray(y_val_pred).reshape(-1, 1)).ravel()
-            y_test_pred = target_scaler.inverse_transform(np.asarray(y_test_pred).reshape(-1, 1)).ravel()
             val_preds[iter_i] = y_val_pred
             test_preds[iter_i] = y_test_pred
 
             print(f"NST Iteration {iter_i}")
             print(X_nst.shape)
-            print(f'Val R2: {r2_score(y_val_orig, y_val_pred)} | RMSE: {root_mean_squared_error(y_val_orig, y_val_pred)}')
-            print(f'Test R2: {r2_score(y_test_orig, y_test_pred)} | RMSE: {root_mean_squared_error(y_test_orig, y_test_pred)}')
+            print(f'Val R2: {r2_score(y_val, y_val_pred)} | RMSE: {root_mean_squared_error(y_val, y_val_pred)}')
+            print(f'Test R2: {r2_score(y_test, y_test_pred)} | RMSE: {root_mean_squared_error(y_test, y_test_pred)}')
 
-            # Save the best test predictions
-            if (iter_i == 3 and moldataset == "Lipo") or \
-               (iter_i == 1 and moldataset in ["FreeSolv", "ESOL"]):
+            # Save the best test predictions for iteration 2
+            if iter_i == 2 and fusion:
+                y_test_pred_orig = target_scaler.inverse_transform(np.asarray(y_test_pred).reshape(-1, 1)).ravel()
                 col_name = f'y_pred_{mlp_seed}'
-                all_test_preds_df[col_name] = y_test_pred
-
-                # feature importance
-                X_test_np = X_test.values if isinstance(X_test, pd.DataFrame) else X_test
-
-                perm_result = permutation_importance(
-                    mlp_optimal,
-                    X_test_np,
-                    y_test,
-                    random_state=mlp_seed,
-                    scoring='r2',
-                )
-                feat_imp = perm_result.importances_mean  # shape: (n_features,)
-                feat_importances.append(feat_imp)
+                all_test_preds_df[col_name] = y_test_pred_orig
 
         val_result_entry = {
             'Torch Seed': torch_seed,
@@ -603,9 +587,9 @@ for i, (torch_seed, data_seed) in enumerate(seed_combinations):
             'MLP Seed': mlp_seed,
         }
         for iter_i in range(nst_iterations + 1):
-            val_result_entry[f'Iter{iter_i} R2'] = r2_score(y_val_orig, val_preds[iter_i])
-            val_result_entry[f'Iter{iter_i} RMSE'] = root_mean_squared_error(y_val_orig, val_preds[iter_i])
-            val_result_entry[f'Iter{iter_i} Spearman'] = spearmanr(y_val_orig, val_preds[iter_i]).correlation
+            val_result_entry[f'Iter{iter_i} R2'] = r2_score(y_val, val_preds[iter_i])
+            val_result_entry[f'Iter{iter_i} RMSE'] = root_mean_squared_error(y_val, val_preds[iter_i])
+            val_result_entry[f'Iter{iter_i} Spearman'] = spearmanr(y_val, val_preds[iter_i]).correlation
         val_results.append(val_result_entry)
 
         result_entry = {
@@ -614,9 +598,9 @@ for i, (torch_seed, data_seed) in enumerate(seed_combinations):
             'MLP Seed': mlp_seed,
         }
         for iter_i in range(nst_iterations + 1):
-            result_entry[f'Iter{iter_i} R2'] = r2_score(y_test_orig, test_preds[iter_i])
-            result_entry[f'Iter{iter_i} RMSE'] = root_mean_squared_error(y_test_orig, test_preds[iter_i])
-            result_entry[f'Iter{iter_i} Spearman'] = spearmanr(y_test_orig, test_preds[iter_i]).correlation
+            result_entry[f'Iter{iter_i} R2'] = r2_score(y_test, test_preds[iter_i])
+            result_entry[f'Iter{iter_i} RMSE'] = root_mean_squared_error(y_test, test_preds[iter_i])
+            result_entry[f'Iter{iter_i} Spearman'] = spearmanr(y_test, test_preds[iter_i]).correlation
         results.append(result_entry)
 
 results_df = pd.DataFrame(results)
@@ -625,7 +609,4 @@ results_df.to_csv(os.path.join(save_dir, f'{GNN}_test_performance.csv'), index=F
 val_results_df = pd.DataFrame(val_results)
 val_results_df.to_csv(os.path.join(save_dir, f'{GNN}_val_performance.csv'), index=False)
 
-all_test_preds_df.to_csv(os.path.join(save_dir, f'{GNN}_{moldataset}_y_test.csv'), index=False)
-
-feat_importances = np.array(feat_importances)  # shape: (n_runs, n_features)
-np.save(os.path.join(save_dir, f'{GNN}_{moldataset}_feature_importances.npy'), feat_importances)
+all_test_preds_df.to_csv(os.path.join(save_dir, f'{GNN}_permeability_y_test.csv'), index=False)

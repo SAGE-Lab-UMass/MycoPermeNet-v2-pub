@@ -534,7 +534,7 @@ def get_emb_dataloaders(train_val_dataset, test_dataset, seed=42):
     val_loader = DataLoader(val_dataset, batch_size=len(val_dataset), shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=len(test_dataset), shuffle=False)
 
-    return train_loader, val_loader, test_loader
+    return train_loader, val_loader, test_loader, target_scaler
 
 
 # def functional_groups_from_smiles(smiles_list):
@@ -958,7 +958,7 @@ def get_emb_dataloaders_from_molnet(dataset, val_ratio=0.2, seed=42):
     test_loader = DataLoader(test_dataset, batch_size=len(test_dataset), shuffle=False)
 
     print(f"Stage 2 Train size: {len(train_dataset)} | Val size: {len(val_dataset)} | Test size: {len(test_dataset)}")
-    return train_loader, val_loader, test_loader
+    return train_loader, val_loader, test_loader, target_scaler
 
 
 def get_dataset_from_mlsmr_mtb(smiles_list, descriptor_names=None):
