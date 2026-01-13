@@ -12,11 +12,11 @@ The directory structure of this project is shown as below:
 
 - [.github/workflows/](.github/workflows/) contains the yml test files for GitHub Actions.
 
-- [data](data/) stores critical raw data, train_val and test permeability data, preprocessed labeled descriptors, unlabeled datasets for NST. The preprocessed large MLSMR dataset is provided in this [Google Drive](https://drive.google.com/drive/folders/1qY9JcMwK-HUQ2g2xuNPPnVxtyEXt4jxh?usp=sharing), and all the [MoleculeNet benchmark datasets](https://pytorch-geometric.readthedocs.io/en/stable/generated/torch_geometric.datasets.MoleculeNet.html) are from the [PyG library](https://pyg.org/).
+- [data](data/) stores critical raw data, train_val and test permeability data, preprocessed labeled descriptors, unlabeled datasets for NST. The random seeds for [49](./data/random_seeds_49.csv) (FreeSolv, ESOL, Permeability) and [9](./data/random_seeds_9.csv) (Lipo) repetitions are also included. The preprocessed large MLSMR dataset is provided in this [Google Drive](https://drive.google.com/drive/folders/1qY9JcMwK-HUQ2g2xuNPPnVxtyEXt4jxh?usp=sharing), and all the [MoleculeNet benchmark datasets](https://pytorch-geometric.readthedocs.io/en/stable/generated/torch_geometric.datasets.MoleculeNet.html) are from the [PyG library](https://pyg.org/).
 
 - [data_tools](data_tools/) has scripts to compute descriptors, preprocess data, construct datasets, etc.
 
-- [model](model/) contains the pretrained Chemprop and MLP checkpoints of the MycoPermeNet-v2 model under the best random state.
+- [model](model/) contains the pretrained Chemprop and MLP checkpoints of the MycoPermeNet-v2 model under the best random state. The feature columns and target scaler are also provided.
 
 - [models](models/) defines the GNN encoders, MINE model, and MLP.
 
