@@ -61,6 +61,14 @@ Train MycoPermeNet-v2 for other [properties' prediction from MoleculeNet](script
 python script/moleculenet_nst.py --moldataset Lipo --GNN AttentiveFP --fusion True --NST True --NST_volume 1000
 ```
 
+## Evaluation
+
+We store the feature scaler, target scaler, RDKit descriptor normalization scaler, best Chemprop and MLP models for both the best MycoPermeNet-v1 and v2 models in [best_MPN](/best_MPN). One can use the [evaluation](/script/evaluate.py) script to predict permeability values by using these best MycoPermeNet models:
+
+```bash
+python script/evaluate.py
+```
+
 ## Acknowledgement
 
 *We want to thank the [original implementation of Chemprop](https://github.com/chemprop/chemprop) and the [PyG reimplementation of Chemprop](https://github.com/itakigawa/pyg_chemprop).*
