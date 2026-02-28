@@ -1,6 +1,9 @@
 sbatch
 out
 plots
+results
+data
+
 
 */test.py
 
@@ -12,3 +15,5 @@ plots
 
 # Ignore __pycache__ directory
 */__pycache__/
+
+*/*_archived.py
