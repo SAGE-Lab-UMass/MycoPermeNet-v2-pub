@@ -13,17 +13,25 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Conda (mambaforge)
+      - name: Cache conda packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/conda_pkgs_dir
+          key: ${{ runner.os }}-conda-${{ hashFiles('environment.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-conda-
+
+      - name: Set up Conda (miniforge)
         uses: conda-incubator/setup-miniconda@v3
         with:
-          miniforge-variant: Mambaforge
+          miniforge-variant: Miniforge3
           miniforge-version: latest
           use-mamba: true
-          auto-update-conda: false
           activate-environment: permeability_torch
           environment-file: environment.yml
           auto-activate-base: false
-          cache-environment: true
+          pkgs-dirs: ~/conda_pkgs_dir
 
       - name: Show environment info
         shell: bash -l {0}
