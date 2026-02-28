@@ -37,12 +37,10 @@ git clone https://github.com/SAGE-Lab-UMass/MycoPermeNet-v2-pub.git
 cd MycoPermeNet-v2-pub
 ```
 
-2. Create and activate a virtual environment
-
-3. Install dependencies
+2. Install dependencies
 
 ```bash
-pip install -r requirements.txt
+conda env create -f environment.yml
 ```
 
 ## Train and test
