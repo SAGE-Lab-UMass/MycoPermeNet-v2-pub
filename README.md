@@ -1,7 +1,5 @@
 # MycoPermeNet-v2
 
-[![Environment](https://github.com/SAGE-Lab-UMass/MycoPermeNet-v2-pub/actions/workflows/evaluate.yml/badge.svg)](https://github.com/SAGE-Lab-UMass/MycoPermeNet-v2-pub/actions/workflows/evaluate.yml)
-
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://github.com/SAGE-Lab-UMass/MycoPermeNet-v2-pub/blob/main/LICENSE)
 
 ***Improved Prediction of Mycomembrane Permeation Using Fusion Noisy Student Self-distillation***
