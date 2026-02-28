@@ -8,13 +8,11 @@
 
 The directory structure of this project is shown as below:
 
-- [.github/workflows/](.github/workflows/) contains the yml test files for GitHub Actions.
-
 - [data](data/) stores critical raw data, train_val and test permeability data, preprocessed labeled descriptors, unlabeled datasets for NST. The random seeds for [49](./data/random_seeds_49.csv) (FreeSolv, ESOL, Permeability) and [9](./data/random_seeds_9.csv) (Lipo) repetitions are also included. The preprocessed large MLSMR dataset is provided in this [Google Drive](https://drive.google.com/drive/folders/1qY9JcMwK-HUQ2g2xuNPPnVxtyEXt4jxh?usp=sharing), and all the [MoleculeNet benchmark datasets](https://pytorch-geometric.readthedocs.io/en/stable/generated/torch_geometric.datasets.MoleculeNet.html) are from the [PyG library](https://pyg.org/).
 
 - [data_tools](data_tools/) has scripts to compute descriptors, preprocess data, construct datasets, etc.
 
-- [model](model/) contains the pretrained Chemprop and MLP checkpoints of the MycoPermeNet-v2 model under the best random state. The feature columns and target scaler are also provided.
+- [best_MPN](/best_MPN) stores feature scaler, target scaler, RDKit descriptor normalization scaler, best Chemprop and MLP models for both the best MycoPermeNet-v1 and v2 models.
 
 - [models](models/) defines the GNN encoders, MINE model, and MLP.
 
@@ -48,13 +46,13 @@ Our MycoPermeNet-v2 pipeline is implemented based on the [PyG framework](https:/
 To train MycoPermeNet-v2 for [permeability property prediction](script/mycoperme_nst.py), use the command line:
 
 ```bash
-python script/mycoperme_nst.py --GNN chemprop --fusion True --NST True --NST_volume 500
+python -m script.mycoperme_nst --GNN chemprop --fusion True --NST True --NST_volume 500
 ```
 
 Train MycoPermeNet-v2 for other [properties' prediction from MoleculeNet](script/moleculenet_nst.py), use the command line:
 
 ```bash
-python script/moleculenet_nst.py --moldataset Lipo --GNN AttentiveFP --fusion True --NST True --NST_volume 1000
+python -m script.moleculenet_nst --moldataset Lipo --GNN AttentiveFP --fusion True --NST True --NST_volume 1000
 ```
 
 ## Evaluation
@@ -62,7 +60,7 @@ python script/moleculenet_nst.py --moldataset Lipo --GNN AttentiveFP --fusion Tr
 We store the feature scaler, target scaler, RDKit descriptor normalization scaler, best Chemprop and MLP models for both the best MycoPermeNet-v1 and v2 models in [best_MPN](/best_MPN). One can use the [evaluation](/script/evaluate.py) script to predict permeability values by using these best MycoPermeNet models:
 
 ```bash
-python script/evaluate.py
+python -m script.evaluate
 ```
 
 ## Acknowledgement
