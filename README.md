@@ -1,8 +1,11 @@
 # MycoPermeNet-v2
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://github.com/SAGE-Lab-UMass/MycoPermeNet-v2-pub/blob/main/LICENSE)
+[![Paper: JCIM](https://img.shields.io/badge/Paper-JCIM-yellow.svg)](https://pubs.acs.org/journal/jcisd8)
 
 ***Improved Prediction of Mycomembrane Permeation Using Fusion Noisy Student Self-distillation***
+
+![xxx](fig/fusionNST.png)
 
 ## Directory structure
 
