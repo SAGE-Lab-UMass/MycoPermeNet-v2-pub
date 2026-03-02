@@ -1,9 +1,10 @@
 # MycoPermeNet-v2
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://github.com/SAGE-Lab-UMass/MycoPermeNet-v2-pub/blob/main/LICENSE)
-[![Paper: JCIM](https://img.shields.io/badge/Paper-JCIM-yellow.svg)](https://pubs.acs.org/journal/jcisd8)
+[![Paper: JCIM](https://img.shields.io/badge/Paper-JCIM-yellow.svg)](https://pubs.acs.org/doi/10.1021/acs.jcim.5c02435)
+[![PyTorch Geometric](https://img.shields.io/badge/PyTorch%20Geometric-2.6.1-orange.svg)](https://pytorch-geometric.readthedocs.io/)
 
-***Improved Prediction of Mycomembrane Permeation Using Fusion Noisy Student Self-distillation***
+***[MycoPermeNet-v2: Improved Prediction of Mycomembrane Permeation Using Fusion Noisy Student Self-Distillation](https://pubs.acs.org/doi/10.1021/acs.jcim.5c02435)***
 
 ![xxx](fig/fusionNST.png)
 
