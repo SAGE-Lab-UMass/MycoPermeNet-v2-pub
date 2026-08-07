@@ -1,0 +1,45 @@
+name: permeability_torch
+channels:
+  - pytorch
+  - pyg
+  - conda-forge
+
+dependencies:
+  # Python
+  - python=3.11
+  - pip
+
+  # Scientific Python
+  - numpy
+  - scipy
+  - pandas
+  - scikit-learn
+  - matplotlib
+  - seaborn
+  - tqdm
+
+  # Chemistry
+  - rdkit
+
+  # Deep learning
+  - pytorch>=2.3
+  - torchvision
+  - torchaudio
+  - torchtriton
+  - torch-scatter
+
+  # Graph neural networks
+  - pyg
+
+  # Utilities
+  - jupyterlab
+  - ipykernel
+  - pyyaml
+
+  # Install remaining packages with pip
+  - pip:
+      - tensorboard
+      - networkx
+      - ogb
+      - einops
+      - chemprop

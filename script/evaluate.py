@@ -5,7 +5,7 @@ import pickle
 import joblib
 import numpy as np
 import pandas as pd
-from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.metrics import r2_score, root_mean_squared_error
 
 from data_tools.evaluate_utils import (get_eval_dataset,
                                        get_eval_dataloaders,
@@ -105,10 +105,10 @@ test_df["y_pred_v1"] = y_pred_v1
 test_df["y_pred_v2"] = y_pred_v2
 
 print("v1")
-print("RMSE:", mean_squared_error(test_df["MTB Standardized Residuals"], test_df["y_pred_v1"], squared=False))
+print("RMSE:", root_mean_squared_error(test_df["MTB Standardized Residuals"], test_df["y_pred_v1"]))
 print("R²:", r2_score(test_df["MTB Standardized Residuals"], test_df["y_pred_v1"]))
 print("\nv2")
-print("RMSE:", mean_squared_error(test_df["MTB Standardized Residuals"], test_df["y_pred_v2"], squared=False))
+print("RMSE:", root_mean_squared_error(test_df["MTB Standardized Residuals"], test_df["y_pred_v2"]))
 print("R²:", r2_score(test_df["MTB Standardized Residuals"], test_df["y_pred_v2"]))
 
 # test_df.to_csv("./results/test_compound_predictions.csv", index=False)
